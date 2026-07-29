@@ -172,7 +172,6 @@ document.getElementById('btn-reset-top').addEventListener('click', () => {
 
 document.getElementById('btn-solo').addEventListener('click', () => {
     document.getElementById('start-screen').style.display = 'none';
-    document.getElementById('status-msg').innerText = "ソロプレイ";
     gameMode = 'solo';
     startGame();
 });
@@ -229,7 +228,6 @@ if (socket) {
     });
     socket.on('roomFull', () => alert("このルームは満員です。"));
     socket.on('gameStart', () => { 
-        document.getElementById('status-msg').innerText = "対戦スタート！"; 
         document.getElementById('end-menu').style.display = 'none';
         startGame(); 
     });
@@ -259,6 +257,8 @@ if (socket) {
 function startGame() {
     isPlaying = true;
     isGameStarted = true;
+    // 開始時に表示テキストを更新
+    document.getElementById('status-msg').innerText = (gameMode === 'solo') ? "ソロプレイ" : "対戦スタート！";
     document.getElementById('end-menu').style.display = 'none';
     board.forEach(row => row.fill(0));
     bag = []; nextQueue = []; holdType = null; combo = 0; b2b = false; pendingGarbage = 0;
@@ -344,7 +344,6 @@ function spawnPiece(type) {
     player.pos.x = Math.floor(5 - player.matrix[0].length / 2);
     lockTimer = 0; moveResets = 0; lowestY = player.pos.y; lastAction = null;
     
-    /* 敗北条件1: Block Out (スポーン位置に重複があり出現不能) */
     if (collide(board, player)) {
         triggerGameOver();
         return;
@@ -453,7 +452,7 @@ function lockPiece() {
         row.forEach((value, x) => {
             if (value !== 0) {
                 const targetY = y + player.pos.y;
-                if (targetY >= 0) isAllOutside = false; // 画面内にブロックが部分的にでもあれば通常処理
+                if (targetY >= 0) isAllOutside = false;
                 if (targetY >= 0 && targetY < 20) {
                     board[targetY][x + player.pos.x] = value;
                 }
@@ -461,7 +460,6 @@ function lockPiece() {
         });
     });
 
-    /* 敗北条件2: Lock Out (完全に画面外/可視領域外でロック) */
     if (isAllOutside) {
         triggerGameOver();
         return;
@@ -566,7 +564,6 @@ function calculateFirepower(lines, tspinResult) {
 function applyGarbage() {
     if (pendingGarbage > 0) {
         for (let i = 0; i < pendingGarbage; i++) {
-            /* 敗北条件3: Garbage Top-Out (最上段にブロックがある状態でおじゃま競り上がりによる溢れ) */
             if (board[0].some(val => val !== 0)) {
                 pendingGarbage = 0;
                 triggerGameOver();
