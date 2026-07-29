@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>本格テトリス (公式ガイドライン火力・タイミング準拠版)</title>
+    <title>本格テトリス (公式敗北条件準拠版)</title>
     <script src="/socket.io/socket.io.js"></script>
     <style>
         body {
@@ -12,6 +12,19 @@
             font-family: sans-serif; margin: 0; padding: 10px;
             touch-action: none;
         }
+        
+        .top-bar {
+            display: flex; align-items: center; justify-content: space-between;
+            width: 100%; max-width: 500px; margin-bottom: 10px;
+        }
+        #status-msg { color: #ffeb3b; font-size: 16px; font-weight: bold; }
+        #btn-reset-top {
+            background-color: #d32f2f; color: #fff; border: none;
+            padding: 6px 12px; border-radius: 4px; font-size: 12px;
+            font-weight: bold; cursor: pointer;
+        }
+        #btn-reset-top:hover { background-color: #b71c1c; }
+
         #start-screen {
             position: absolute; top: 20%; background: #111;
             padding: 30px; border: 2px solid #555; border-radius: 10px;
@@ -27,6 +40,16 @@
         #multi-login input { padding: 10px; font-size: 16px; width: 180px; }
         #multi-login button { padding: 10px 15px; font-size: 16px; background: #ff9800; color: #fff; }
 
+        #end-menu {
+            display: none; margin-bottom: 10px; text-align: center; z-index: 15;
+        }
+        #btn-rematch {
+            background-color: #ff9800; color: #fff; border: none;
+            padding: 10px 20px; font-size: 16px; font-weight: bold;
+            border-radius: 6px; cursor: pointer; box-shadow: 0 0 10px rgba(255,152,0,0.5);
+        }
+        #btn-rematch:disabled { background-color: #666; cursor: not-allowed; box-shadow: none; }
+
         .vs-wrapper { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; }
         .player-area, .opponent-area { display: flex; flex-direction: column; align-items: center; position: relative; }
         .game-wrapper { display: flex; gap: 5px; align-items: flex-start; }
@@ -40,7 +63,6 @@
         canvas { background-color: #000; }
         .main-board { border: 2px solid #555; box-shadow: 0 0 15px rgba(255, 255, 255, 0.2); }
         
-        /* アクションテキスト演出 (改行対応) */
         #action-text {
             position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
             color: #ffeb3b; font-size: 22px; font-weight: bold; font-style: italic;
@@ -58,8 +80,6 @@
             100% { opacity: 0; transform: translate(-50%, -70%); }
         }
 
-        #status-msg { color: #ffeb3b; font-size: 18px; margin-bottom: 5px; font-weight: bold; height: 24px; }
-        
         #mobile-controls {
             display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
             margin-top: 15px; width: 100%; max-width: 400px;
@@ -75,19 +95,20 @@
         kbd { background-color: #444; padding: 2px 5px; border-radius: 4px; }
         
         @media (min-width: 768px) { #mobile-controls { display: none; } }
-
-        /* スマホ画面（767px以下）では対戦相手エリアを非表示 */
-        @media (max-width: 767px) {
-            #opponent-container {
-                display: none !important;
-            }
-        }
+        @media (max-width: 767px) { #opponent-container { display: none !important; } }
     </style>
 </head>
 <body>
 
-    <div id="status-msg">モードを選択してください</div>
-    
+    <div class="top-bar">
+        <span id="status-msg">モードを選択してください</span>
+        <button id="btn-reset-top">タイトルへ (リセット)</button>
+    </div>
+
+    <div id="end-menu">
+        <button id="btn-rematch">同じペアで続ける</button>
+    </div>
+
     <div id="start-screen">
         <h2>テトリス</h2>
         <button id="btn-solo">ソロプレイ</button>
@@ -141,8 +162,13 @@
 const socket = typeof io !== 'undefined' ? io() : null;
 let gameMode = 'solo';
 let isPlaying = false;
+let isGameStarted = false;
 let isClearing = false;
 let clearingLines = [];
+
+document.getElementById('btn-reset-top').addEventListener('click', () => {
+    location.reload();
+});
 
 document.getElementById('btn-solo').addEventListener('click', () => {
     document.getElementById('start-screen').style.display = 'none';
@@ -163,17 +189,66 @@ document.getElementById('join-btn').addEventListener('click', () => {
     if (pass) socket.emit('joinRoom', pass);
 });
 
+const rematchBtn = document.getElementById('btn-rematch');
+rematchBtn.addEventListener('click', () => {
+    if (gameMode === 'solo') {
+        document.getElementById('end-menu').style.display = 'none';
+        startGame();
+    } else if (gameMode === 'multi' && socket) {
+        socket.emit('requestRematch');
+        rematchBtn.disabled = true;
+        document.getElementById('status-msg').innerText = "相手の準備を待っています...";
+    }
+});
+
+function triggerGameOver() {
+    isPlaying = false;
+    isGameStarted = false;
+    document.getElementById('status-msg').innerText = "ゲームオーバー";
+    if (gameMode === 'multi' && socket) socket.emit('gameOver');
+    showEndMenu();
+}
+
+function showEndMenu() {
+    const endMenu = document.getElementById('end-menu');
+    rematchBtn.disabled = false;
+    rematchBtn.innerText = (gameMode === 'solo') ? "もう一度遊ぶ" : "同じペアで続ける";
+    endMenu.style.display = 'block';
+}
+
 if (socket) {
     socket.on('joined', (room) => {
         document.getElementById('start-screen').style.display = 'none';
         document.getElementById('opponent-container').style.display = 'flex';
         gameMode = 'multi';
+        isGameStarted = false;
     });
-    socket.on('waiting', () => document.getElementById('status-msg').innerText = "相手の入室を待っています...");
+    socket.on('waiting', () => {
+        isGameStarted = false;
+        document.getElementById('status-msg').innerText = "相手の入室を待っています...";
+    });
     socket.on('roomFull', () => alert("このルームは満員です。"));
-    socket.on('gameStart', () => { document.getElementById('status-msg').innerText = "対戦スタート！"; startGame(); });
-    socket.on('opponentLeft', () => { document.getElementById('status-msg').innerText = "相手が切断しました(あなたの勝ち)"; isPlaying = false; });
-    socket.on('opponentGameOver', () => { document.getElementById('status-msg').innerText = "相手がゲームオーバー(あなたの勝ち)"; isPlaying = false; });
+    socket.on('gameStart', () => { 
+        document.getElementById('status-msg').innerText = "対戦スタート！"; 
+        document.getElementById('end-menu').style.display = 'none';
+        startGame(); 
+    });
+    socket.on('opponentLeft', () => {
+        if (isGameStarted) {
+            document.getElementById('status-msg').innerText = "相手が切断しました(あなたの勝ち)"; 
+            isPlaying = false; 
+            isGameStarted = false;
+            showEndMenu();
+        } else {
+            document.getElementById('status-msg').innerText = "相手の入室を待っています...";
+        }
+    });
+    socket.on('opponentGameOver', () => { 
+        document.getElementById('status-msg').innerText = "相手がゲームオーバー(あなたの勝ち)"; 
+        isPlaying = false; 
+        isGameStarted = false;
+        showEndMenu();
+    });
     socket.on('opponentBoard', (data) => drawMatrix(data, {x:0, y:0}, oppCtx));
     socket.on('receiveGarbage', (lines) => {
         if(!isPlaying) return;
@@ -182,7 +257,10 @@ if (socket) {
 }
 
 function startGame() {
-    isPlaying = true; board.forEach(row => row.fill(0));
+    isPlaying = true;
+    isGameStarted = true;
+    document.getElementById('end-menu').style.display = 'none';
+    board.forEach(row => row.fill(0));
     bag = []; nextQueue = []; holdType = null; combo = 0; b2b = false; pendingGarbage = 0;
     fillNextQueue(); playerReset(); update();
 }
@@ -237,7 +315,6 @@ const KICK_DATA = {
     }
 };
 
-// 公式REN（コンボ）攻撃力加算テーブル (0 REN, 1 REN, 2 REN...)
 const REN_TABLE = [0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5];
 
 const board = Array.from({length: 20}, () => new Array(10).fill(0));
@@ -267,10 +344,10 @@ function spawnPiece(type) {
     player.pos.x = Math.floor(5 - player.matrix[0].length / 2);
     lockTimer = 0; moveResets = 0; lowestY = player.pos.y; lastAction = null;
     
+    /* 敗北条件1: Block Out (スポーン位置に重複があり出現不能) */
     if (collide(board, player)) {
-        isPlaying = false;
-        document.getElementById('status-msg').innerText = "ゲームオーバー";
-        if(gameMode === 'multi') socket.emit('gameOver');
+        triggerGameOver();
+        return;
     }
     emitBoardState();
 }
@@ -336,7 +413,6 @@ function showActionText(text) {
     el.classList.add('pop-anim');
 }
 
-// 公式Tスピン判定 (3角判定 & 正面角チェックによるMini識別)
 function checkTSpin() {
     if (player.type !== 6 || lastAction !== 'rotate') return { isTSpin: false, isMini: false };
     
@@ -358,7 +434,6 @@ function checkTSpin() {
 
     if (cornersCount < 3) return { isTSpin: false, isMini: false };
 
-    // Tミノーの正面2角が埋まっているかチェック
     const state = player.rotationState;
     let frontCount = 0;
     if (state === 0) { if(filledCorners.includes(0)) frontCount++; if(filledCorners.includes(1)) frontCount++; }
@@ -366,7 +441,6 @@ function checkTSpin() {
     else if (state === 2) { if(filledCorners.includes(2)) frontCount++; if(filledCorners.includes(3)) frontCount++; }
     else if (state === 3) { if(filledCorners.includes(3)) frontCount++; if(filledCorners.includes(0)) frontCount++; }
 
-    // 正面角が2つ埋まっていれば通常のTスピン、1つならTスピンMini
     return { isTSpin: true, isMini: (frontCount < 2) };
 }
 
@@ -374,11 +448,24 @@ function lockPiece() {
     if (isClearing) return;
     const tspinResult = checkTSpin();
     
+    let isAllOutside = true;
     player.matrix.forEach((row, y) => {
         row.forEach((value, x) => {
-            if (value !== 0) board[y + player.pos.y][x + player.pos.x] = value;
+            if (value !== 0) {
+                const targetY = y + player.pos.y;
+                if (targetY >= 0) isAllOutside = false; // 画面内にブロックが部分的にでもあれば通常処理
+                if (targetY >= 0 && targetY < 20) {
+                    board[targetY][x + player.pos.x] = value;
+                }
+            }
         });
     });
+
+    /* 敗北条件2: Lock Out (完全に画面外/可視領域外でロック) */
+    if (isAllOutside) {
+        triggerGameOver();
+        return;
+    }
 
     clearingLines = [];
     for (let y = 0; y < board.length; ++y) {
@@ -397,7 +484,6 @@ function lockPiece() {
                 board.unshift(new Array(10).fill(0));
             });
             
-            // 全消し（パーフェクトクリア）判定: 10ライン攻撃力
             if (board.every(row => row.every(val => val === 0))) {
                 showActionText("PERFECT CLEAR!");
                 if(gameMode === 'multi') socket.emit('sendGarbage', 10);
@@ -411,21 +497,19 @@ function lockPiece() {
         if (tspinResult.isTSpin) {
             showActionText(tspinResult.isMini ? "T-SPIN MINI" : "T-SPIN");
         }
-        combo = 0; // ラインが消えなかったためRENリセット
+        combo = 0;
         applyGarbage();
         playerReset();
     }
     dropCounter = 0;
 }
 
-// 公式ガイドライン準拠 火力計算処理
 function calculateFirepower(lines, tspinResult) {
     let baseDamage = 0;
     let txt = "";
     const isTSpin = tspinResult.isTSpin;
     const isMini = tspinResult.isMini;
 
-    // 1. 基本消し攻撃力計算
     if (isTSpin) {
         if (lines === 1) {
             baseDamage = isMini ? 0 : 2;
@@ -444,13 +528,11 @@ function calculateFirepower(lines, tspinResult) {
         else if (lines === 4) { baseDamage = 4; txt = "TETRIS"; }
     }
 
-    // 2. Back-to-Back (B2B) 判定
-    // テトリス(4列消し) または すべてのTスピンライン消去が対象
     const isB2BEligible = (lines === 4) || (isTSpin && lines > 0);
     let b2bBonus = 0;
     if (isB2BEligible) {
         if (b2b) {
-            b2bBonus = 1; // B2B成功時は攻撃力 +1
+            b2bBonus = 1;
             if (txt !== "") txt += " (B2B)";
         }
         b2b = true;
@@ -458,11 +540,10 @@ function calculateFirepower(lines, tspinResult) {
         b2b = false;
     }
 
-    // 3. REN（コンボ）加算処理
     let renBonus = 0;
     if (lines > 0) {
         combo++;
-        if (combo > 1) { // 2連消し(= 1 REN) から加算
+        if (combo > 1) {
             const renIndex = Math.min(combo - 2, REN_TABLE.length - 1);
             renBonus = REN_TABLE[renIndex];
             const renDisplay = combo - 1;
@@ -484,7 +565,13 @@ function calculateFirepower(lines, tspinResult) {
 
 function applyGarbage() {
     if (pendingGarbage > 0) {
-        for(let i = 0; i < pendingGarbage; i++) {
+        for (let i = 0; i < pendingGarbage; i++) {
+            /* 敗北条件3: Garbage Top-Out (最上段にブロックがある状態でおじゃま競り上がりによる溢れ) */
+            if (board[0].some(val => val !== 0)) {
+                pendingGarbage = 0;
+                triggerGameOver();
+                return;
+            }
             board.shift();
             const garbageRow = new Array(10).fill(8);
             garbageRow[Math.floor(Math.random() * 10)] = 0;
@@ -601,7 +688,6 @@ function update(time = 0) {
 
         if (collide(board, {matrix: player.matrix, pos: {x:player.pos.x, y:player.pos.y+1}})) {
             lockTimer += deltaTime;
-            // 公式ガイドライン規格: 接地固定猶予 500ms (0.5秒)
             if (lockTimer >= 500) lockPiece();
         } else { lockTimer = 0; }
     }
@@ -624,7 +710,6 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('keyup', e => activeKeys[e.code] = false);
 
-// ボタン長押し操作 (公式DAS 150ms / ARR 33ms 準拠)
 function bindBtn(id, action, pressAction) {
     const el = document.getElementById(id);
     let timeout, interval;
@@ -637,7 +722,6 @@ function bindBtn(id, action, pressAction) {
             } else { 
                 clearTimeout(timeout);
                 clearInterval(interval);
-                // 公式設定: DAS 150ms (長押し検知開始) / ARR 33ms (秒間約30回移動)
                 timeout = setTimeout(() => {
                     interval = setInterval(pressAction, 33);
                 }, 150);
