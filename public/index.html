@@ -41,6 +41,12 @@
             border: 2px solid #333333;
             border-radius: 4px;
             display: block;
+
+            /* ぼやけ防止（ドット絵のようにくっきり拡大表示する設定） */
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: -webkit-optimize-contrast;
         }
 
         #player-canvas {
@@ -176,6 +182,7 @@
             if (collide(board, player)) {
                 board.forEach(row => row.fill(0));
             }
+            emitBoardState();
         }
 
         function collide(board, player) {
@@ -209,7 +216,7 @@
             return tempPos.y - 1;
         }
 
-        // 描画関数（値が10超のものをゴーストとして半透明描画）
+        // 描画処理（透明度・輪郭指定）
         function drawMatrix(matrix, offset, ctx, isGhost = false, isFlash = false) {
             if (!matrix) return;
             matrix.forEach((row, y) => {
@@ -218,18 +225,27 @@
                         const isG = isGhost || value > 10;
                         const val = value > 10 ? value - 10 : value;
 
+                        ctx.save();
+                        
+                        if (isG) {
+                            ctx.globalAlpha = 0.3;
+                        } else {
+                            ctx.globalAlpha = 1.0;
+                        }
+
                         if (isFlash) { 
                             ctx.fillStyle = '#FFFFFF'; 
-                        } else if (isG) { 
-                            ctx.fillStyle = (COLORS[val] || '#FFFFFF') + '40';
-                            ctx.strokeStyle = 'rgba(255,255,255,0.2)'; 
                         } else { 
                             ctx.fillStyle = COLORS[val] || '#FFFFFF'; 
-                            ctx.strokeStyle = 'rgba(0,0,0,0.5)'; 
                         }
+
                         ctx.fillRect(x + offset.x, y + offset.y, 1, 1);
+
+                        ctx.strokeStyle = isG ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.5)';
                         ctx.lineWidth = 0.05;
                         ctx.strokeRect(x + offset.x, y + offset.y, 1, 1);
+
+                        ctx.restore();
                     }
                 });
             });
@@ -247,7 +263,6 @@
             }
         }
 
-        // 相手に盤面を送る際、ゴーストの位置には「値 + 10」を入れて送信
         function emitBoardState() {
             if (gameMode !== 'multi' || !isPlaying) return;
             const renderBoard = board.map(row => [...row]);
