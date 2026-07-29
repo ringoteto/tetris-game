@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Webテトリス</title>
+    <title>本格テトリス (Tスピン完全固定版)</title>
     <script src="/socket.io/socket.io.js"></script>
     <style>
         body {
@@ -47,6 +47,7 @@
             background-color: #ff9800; color: #fff; border: none;
             padding: 10px 20px; font-size: 16px; font-weight: bold;
             border-radius: 6px; cursor: pointer; box-shadow: 0 0 10px rgba(255,152,0,0.5);
+            transition: background-color 0.3s;
         }
         #btn-rematch:disabled { background-color: #666; cursor: not-allowed; box-shadow: none; }
 
@@ -196,12 +197,12 @@ rematchBtn.addEventListener('click', () => {
     } else if (gameMode === 'multi' && socket) {
         socket.emit('requestRematch');
         rematchBtn.disabled = true;
+        rematchBtn.innerText = "相手の準備を待っています...";
         document.getElementById('status-msg').innerText = "相手の準備を待っています...";
     }
 });
 
 function triggerGameOver() {
-    // 死亡直前の盤面を確定させて相手に送信
     emitBoardState();
     isPlaying = false;
     isGameStarted = false;
@@ -213,7 +214,8 @@ function triggerGameOver() {
 function showEndMenu() {
     const endMenu = document.getElementById('end-menu');
     rematchBtn.disabled = false;
-    rematchBtn.innerText = (gameMode === 'solo') ? "もう一度遊ぶ" : "同じ合言葉で続ける";
+    rematchBtn.style.backgroundColor = "#ff9800";
+    rematchBtn.innerText = (gameMode === 'solo') ? "もう一度遊ぶ" : "同じペアで続ける";
     endMenu.style.display = 'block';
 }
 
@@ -232,6 +234,8 @@ if (socket) {
     socket.on('gameStart', () => { 
         document.getElementById('end-menu').style.display = 'none';
         rematchBtn.disabled = false;
+        rematchBtn.style.backgroundColor = "#ff9800";
+        rematchBtn.innerText = "同じペアで続ける";
         startGame(); 
     });
     socket.on('opponentLeft', () => {
@@ -254,6 +258,8 @@ if (socket) {
     socket.on('opponentRematch', () => {
         if (!isGameStarted) {
             document.getElementById('status-msg').innerText = "相手が再戦を希望しています！";
+            rematchBtn.innerText = "相手が再戦希望中！(タップして開始)";
+            rematchBtn.style.backgroundColor = "#4CAF50";
         }
     });
     socket.on('receiveGarbage', (lines) => {
@@ -351,7 +357,6 @@ function spawnPiece(type) {
     player.pos.x = Math.floor(5 - player.matrix[0].length / 2);
     lockTimer = 0; moveResets = 0; lowestY = player.pos.y; lastAction = null;
     
-    // 【Block Out判定】出現位置に既存ブロックがある場合
     if (collide(board, player)) {
         player.matrix.forEach((row, y) => {
             row.forEach((value, x) => {
@@ -444,7 +449,7 @@ function checkTSpin() {
 
     corners.forEach(c => {
         const cx = px + c.x, cy = py + c.y;
-        if (cx < 0 || cx >= 10 || cy >= 20 || board[cy][cx] !== 0) {
+        if (cx < 0 || cx >= 10 || cy < 0 || cy >= 20 || (board[cy] && board[cy][cx] !== 0)) {
             cornersCount++;
             filledCorners.push(c.id);
         }
@@ -471,7 +476,7 @@ function lockPiece() {
         row.forEach((value, x) => {
             if (value !== 0) {
                 const targetY = y + player.pos.y;
-                if (targetY >= 0) isAllOutside = false; // 1マスでも画面内にあればLock Outではない
+                if (targetY >= 0) isAllOutside = false;
                 if (targetY >= 0 && targetY < 20) {
                     board[targetY][x + player.pos.x] = value;
                 }
@@ -479,7 +484,6 @@ function lockPiece() {
         });
     });
 
-    // 【Lock Out判定】全ブロックが完全に画面外(y < 0)で固定された場合
     if (isAllOutside) {
         draw();
         triggerGameOver();
@@ -537,7 +541,7 @@ function calculateFirepower(lines, tspinResult) {
             baseDamage = isMini ? 1 : 4;
             txt = isMini ? "T-SPIN MINI DOUBLE" : "T-SPIN DOUBLE";
         } else if (lines === 3) {
-            baseDamage = 6;
+            baseDamage = 6; // T-Spin Triple 火力6段
             txt = "T-SPIN TRIPLE";
         }
     } else {
@@ -582,7 +586,6 @@ function calculateFirepower(lines, tspinResult) {
     }
 }
 
-// お邪魔行の全押し出し＆表示確定処理
 function applyGarbage() {
     if (pendingGarbage > 0) {
         let causeGameOver = false;
@@ -654,9 +657,15 @@ function draw() {
     nextQueue.forEach((type, i) => drawMiniMatrix(type, nextCtx, 0, i * 4));
 }
 
+// 【修正箇所】実際に1マス以上落下できた場合のみ lastAction を 'move' にする
 function playerDrop() {
-    player.pos.y++; lastAction = 'move';
-    if (collide(board, player)) player.pos.y--; 
+    player.pos.y++;
+    if (collide(board, player)) {
+        player.pos.y--; // 接地しているため落とせない（lastActionは変更しない）
+    } else {
+        lastAction = 'move'; // 実際に1マス下へ移動できた場合のみ『移動』扱いにする
+        if (player.pos.y > lowestY) { lowestY = player.pos.y; moveResets = 0; }
+    }
     dropCounter = 0; emitBoardState();
 }
 
@@ -726,7 +735,10 @@ document.addEventListener('keydown', e => {
     switch(e.code) {
         case 'ArrowLeft': playerMove(-1); break;
         case 'ArrowRight': playerMove(1); break;
-        case 'ArrowUp': player.pos.y = getGhostY(); lastAction = 'move'; lockPiece(); break;
+        case 'ArrowUp': 
+            player.pos.y = getGhostY(); 
+            lockPiece(); 
+            break;
         case 'Space': holdPiece(); break;
         case 'KeyX': playerRotate(1); break;
         case 'KeyZ': playerRotate(-1); break;
@@ -764,7 +776,12 @@ function bindBtn(id, action, pressAction) {
 bindBtn('btn-left', 'ArrowLeft', () => playerMove(-1));
 bindBtn('btn-right', 'ArrowRight', () => playerMove(1));
 bindBtn('btn-soft', 'ArrowDown', () => {});
-bindBtn('btn-hard', 'ArrowUp', () => { if(!isClearing) { player.pos.y = getGhostY(); lastAction = 'move'; lockPiece(); } });
+bindBtn('btn-hard', 'ArrowUp', () => { 
+    if(!isClearing) { 
+        player.pos.y = getGhostY(); 
+        lockPiece(); 
+    } 
+});
 bindBtn('btn-ccw', 'KeyZ', () => playerRotate(-1));
 bindBtn('btn-cw', 'KeyX', () => playerRotate(1));
 bindBtn('btn-hold', 'Space', () => holdPiece());
