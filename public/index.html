@@ -201,6 +201,8 @@ rematchBtn.addEventListener('click', () => {
 });
 
 function triggerGameOver() {
+    // 死亡直前の盤面を確定させて相手に送信
+    emitBoardState();
     isPlaying = false;
     isGameStarted = false;
     document.getElementById('status-msg').innerText = "ゲームオーバー";
@@ -229,6 +231,7 @@ if (socket) {
     socket.on('roomFull', () => alert("このルームは満員です。"));
     socket.on('gameStart', () => { 
         document.getElementById('end-menu').style.display = 'none';
+        rematchBtn.disabled = false;
         startGame(); 
     });
     socket.on('opponentLeft', () => {
@@ -248,6 +251,11 @@ if (socket) {
         showEndMenu();
     });
     socket.on('opponentBoard', (data) => drawMatrix(data, {x:0, y:0}, oppCtx));
+    socket.on('opponentRematch', () => {
+        if (!isGameStarted) {
+            document.getElementById('status-msg').innerText = "相手が再戦を希望しています！";
+        }
+    });
     socket.on('receiveGarbage', (lines) => {
         if(!isPlaying) return;
         pendingGarbage += lines;
@@ -257,7 +265,6 @@ if (socket) {
 function startGame() {
     isPlaying = true;
     isGameStarted = true;
-    // 開始時に表示テキストを更新
     document.getElementById('status-msg').innerText = (gameMode === 'solo') ? "ソロプレイ" : "対戦スタート！";
     document.getElementById('end-menu').style.display = 'none';
     board.forEach(row => row.fill(0));
@@ -344,7 +351,19 @@ function spawnPiece(type) {
     player.pos.x = Math.floor(5 - player.matrix[0].length / 2);
     lockTimer = 0; moveResets = 0; lowestY = player.pos.y; lastAction = null;
     
+    // 【Block Out判定】出現位置に既存ブロックがある場合
     if (collide(board, player)) {
+        player.matrix.forEach((row, y) => {
+            row.forEach((value, x) => {
+                if (value !== 0) {
+                    const targetY = y + player.pos.y;
+                    if (targetY >= 0 && targetY < 20) {
+                        board[targetY][x + player.pos.x] = value;
+                    }
+                }
+            });
+        });
+        draw();
         triggerGameOver();
         return;
     }
@@ -452,7 +471,7 @@ function lockPiece() {
         row.forEach((value, x) => {
             if (value !== 0) {
                 const targetY = y + player.pos.y;
-                if (targetY >= 0) isAllOutside = false;
+                if (targetY >= 0) isAllOutside = false; // 1マスでも画面内にあればLock Outではない
                 if (targetY >= 0 && targetY < 20) {
                     board[targetY][x + player.pos.x] = value;
                 }
@@ -460,7 +479,9 @@ function lockPiece() {
         });
     });
 
+    // 【Lock Out判定】全ブロックが完全に画面外(y < 0)で固定された場合
     if (isAllOutside) {
+        draw();
         triggerGameOver();
         return;
     }
@@ -561,13 +582,13 @@ function calculateFirepower(lines, tspinResult) {
     }
 }
 
+// お邪魔行の全押し出し＆表示確定処理
 function applyGarbage() {
     if (pendingGarbage > 0) {
+        let causeGameOver = false;
         for (let i = 0; i < pendingGarbage; i++) {
             if (board[0].some(val => val !== 0)) {
-                pendingGarbage = 0;
-                triggerGameOver();
-                return;
+                causeGameOver = true;
             }
             board.shift();
             const garbageRow = new Array(10).fill(8);
@@ -575,7 +596,13 @@ function applyGarbage() {
             board.push(garbageRow);
         }
         pendingGarbage = 0;
+        
+        draw();
         emitBoardState();
+
+        if (causeGameOver) {
+            triggerGameOver();
+        }
     }
 }
 
