@@ -18,6 +18,8 @@ app.use(express.static('public'));
 
 // 合言葉（ルーム名）ごとの参加者リスト管理
 const rooms = {};
+// ルームごとの再戦希望プレイヤーIDの管理
+const rematchRequests = {};
 
 io.on('connection', (socket) => {
   let currentRoom = null;
@@ -73,18 +75,45 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 5. 切断時の処理
+  // 【新規追加】5. 再戦（リマッチ）リクエスト処理
+  socket.on('requestRematch', () => {
+    if (!currentRoom) return;
+
+    if (!rematchRequests[currentRoom]) {
+      rematchRequests[currentRoom] = new Set();
+    }
+
+    // 再戦を押したプレイヤーを記録
+    rematchRequests[currentRoom].add(socket.id);
+
+    // 相手に「再戦希望が届いた」ことを通知
+    socket.to(currentRoom).emit('opponentRematch');
+
+    // 2人とも再戦を押したらゲーム再スタート
+    if (rematchRequests[currentRoom].size >= 2) {
+      rematchRequests[currentRoom].clear(); // リセット
+      io.to(currentRoom).emit('gameStart');
+    }
+  });
+
+  // 6. 切断時の処理
   socket.on('disconnect', () => {
     if (currentRoom && rooms[currentRoom]) {
       // ルームから離脱者を除外
       rooms[currentRoom] = rooms[currentRoom].filter(id => id !== socket.id);
       
+      // 再戦リストからも除外
+      if (rematchRequests[currentRoom]) {
+        rematchRequests[currentRoom].delete(socket.id);
+      }
+
       // 残された相手に通知
       socket.to(currentRoom).emit('opponentLeft');
 
       // ルームが空なら削除
       if (rooms[currentRoom].length === 0) {
         delete rooms[currentRoom];
+        delete rematchRequests[currentRoom];
       }
     }
   });
