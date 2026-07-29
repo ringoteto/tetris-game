@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>本格テトリス (REN演出追加版)</title>
+    <title>本格テトリス (公式ガイドライン火力・タイミング準拠版)</title>
     <script src="/socket.io/socket.io.js"></script>
     <style>
         body {
@@ -76,7 +76,7 @@
         
         @media (min-width: 768px) { #mobile-controls { display: none; } }
 
-        /* スマホ画面（767px以下）では対戦相手エリアを一切表示しない設定 */
+        /* スマホ画面（767px以下）では対戦相手エリアを非表示 */
         @media (max-width: 767px) {
             #opponent-container {
                 display: none !important;
@@ -237,6 +237,9 @@ const KICK_DATA = {
     }
 };
 
+// 公式REN（コンボ）攻撃力加算テーブル (0 REN, 1 REN, 2 REN...)
+const REN_TABLE = [0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5];
+
 const board = Array.from({length: 20}, () => new Array(10).fill(0));
 let bag = [], nextQueue = [], holdType = null, canHold = true;
 const player = { pos: {x: 0, y: 0}, matrix: null, type: 0, rotationState: 0 };
@@ -333,21 +336,43 @@ function showActionText(text) {
     el.classList.add('pop-anim');
 }
 
+// 公式Tスピン判定 (3角判定 & 正面角チェックによるMini識別)
 function checkTSpin() {
-    if (player.type !== 6 || lastAction !== 'rotate') return false;
+    if (player.type !== 6 || lastAction !== 'rotate') return { isTSpin: false, isMini: false };
+    
     let cornersCount = 0;
     const px = player.pos.x, py = player.pos.y;
-    const corners = [ [0,0], [2,0], [0,2], [2,2] ];
+    const corners = [
+        {x:0, y:0, id:0}, {x:2, y:0, id:1},
+        {x:2, y:2, id:2}, {x:0, y:2, id:3}
+    ];
+    let filledCorners = [];
+
     corners.forEach(c => {
-        const cx = px + c[0], cy = py + c[1];
-        if (cx < 0 || cx >= 10 || cy >= 20 || board[cy][cx] !== 0) cornersCount++;
+        const cx = px + c.x, cy = py + c.y;
+        if (cx < 0 || cx >= 10 || cy >= 20 || board[cy][cx] !== 0) {
+            cornersCount++;
+            filledCorners.push(c.id);
+        }
     });
-    return cornersCount >= 3;
+
+    if (cornersCount < 3) return { isTSpin: false, isMini: false };
+
+    // Tミノーの正面2角が埋まっているかチェック
+    const state = player.rotationState;
+    let frontCount = 0;
+    if (state === 0) { if(filledCorners.includes(0)) frontCount++; if(filledCorners.includes(1)) frontCount++; }
+    else if (state === 1) { if(filledCorners.includes(1)) frontCount++; if(filledCorners.includes(2)) frontCount++; }
+    else if (state === 2) { if(filledCorners.includes(2)) frontCount++; if(filledCorners.includes(3)) frontCount++; }
+    else if (state === 3) { if(filledCorners.includes(3)) frontCount++; if(filledCorners.includes(0)) frontCount++; }
+
+    // 正面角が2つ埋まっていれば通常のTスピン、1つならTスピンMini
+    return { isTSpin: true, isMini: (frontCount < 2) };
 }
 
 function lockPiece() {
     if (isClearing) return;
-    const isTSpin = checkTSpin();
+    const tspinResult = checkTSpin();
     
     player.matrix.forEach((row, y) => {
         row.forEach((value, x) => {
@@ -364,7 +389,7 @@ function lockPiece() {
 
     if (clearingLines.length > 0) {
         isClearing = true;
-        calculateFirepower(clearingLines.length, isTSpin);
+        calculateFirepower(clearingLines.length, tspinResult);
         
         setTimeout(() => {
             clearingLines.forEach(y => {
@@ -372,7 +397,8 @@ function lockPiece() {
                 board.unshift(new Array(10).fill(0));
             });
             
-            if (board[19].every(val => val === 0)) {
+            // 全消し（パーフェクトクリア）判定: 10ライン攻撃力
+            if (board.every(row => row.every(val => val === 0))) {
                 showActionText("PERFECT CLEAR!");
                 if(gameMode === 'multi') socket.emit('sendGarbage', 10);
             }
@@ -382,7 +408,9 @@ function lockPiece() {
             playerReset();
         }, 150);
     } else {
-        if (isTSpin) showActionText("T-SPIN");
+        if (tspinResult.isTSpin) {
+            showActionText(tspinResult.isMini ? "T-SPIN MINI" : "T-SPIN");
+        }
         combo = 0; // ラインが消えなかったためRENリセット
         applyGarbage();
         playerReset();
@@ -390,56 +418,67 @@ function lockPiece() {
     dropCounter = 0;
 }
 
-function calculateFirepower(lines, isTSpin) {
-    let damage = 0;
+// 公式ガイドライン準拠 火力計算処理
+function calculateFirepower(lines, tspinResult) {
+    let baseDamage = 0;
     let txt = "";
+    const isTSpin = tspinResult.isTSpin;
+    const isMini = tspinResult.isMini;
 
-    // 1. 基本消しテキスト & 火力
-    if (lines === 1) { 
-        damage = isTSpin ? 2 : 0; 
-        if (isTSpin) txt = "T-SPIN SINGLE";
-    }
-    else if (lines === 2) { 
-        damage = isTSpin ? 4 : 1; 
-        if (isTSpin) txt = "T-SPIN DOUBLE";
-    }
-    else if (lines === 3) { 
-        damage = isTSpin ? 6 : 2; 
-        if (isTSpin) txt = "T-SPIN TRIPLE";
-    }
-    else if (lines === 4) { 
-        damage = 4; 
-        txt = "TETRIS"; 
+    // 1. 基本消し攻撃力計算
+    if (isTSpin) {
+        if (lines === 1) {
+            baseDamage = isMini ? 0 : 2;
+            txt = isMini ? "T-SPIN MINI SINGLE" : "T-SPIN SINGLE";
+        } else if (lines === 2) {
+            baseDamage = isMini ? 1 : 4;
+            txt = isMini ? "T-SPIN MINI DOUBLE" : "T-SPIN DOUBLE";
+        } else if (lines === 3) {
+            baseDamage = 6;
+            txt = "T-SPIN TRIPLE";
+        }
+    } else {
+        if (lines === 1) { baseDamage = 0; }
+        else if (lines === 2) { baseDamage = 1; }
+        else if (lines === 3) { baseDamage = 2; }
+        else if (lines === 4) { baseDamage = 4; txt = "TETRIS"; }
     }
 
-    // 2. Back-to-Back判定
-    const isDifficult = isTSpin || lines === 4;
-    if (isDifficult) {
-        if (b2b) { damage += 1; txt += " (B2B)"; }
+    // 2. Back-to-Back (B2B) 判定
+    // テトリス(4列消し) または すべてのTスピンライン消去が対象
+    const isB2BEligible = (lines === 4) || (isTSpin && lines > 0);
+    let b2bBonus = 0;
+    if (isB2BEligible) {
+        if (b2b) {
+            b2bBonus = 1; // B2B成功時は攻撃力 +1
+            if (txt !== "") txt += " (B2B)";
+        }
         b2b = true;
-    } else { 
-        b2b = false; 
+    } else if (lines > 0) {
+        b2b = false;
     }
 
-    // 3. REN(コンボ)判定 & 演出生成
-    combo++;
-    if (combo > 1) { 
-        damage += Math.floor((combo - 1) / 2); 
-        const renCount = combo - 1; // 2回目の連続消去で "1 REN"
-        if (txt !== "") {
-            txt += `\n${renCount} REN`;
-        } else {
-            txt = `${renCount} REN`;
+    // 3. REN（コンボ）加算処理
+    let renBonus = 0;
+    if (lines > 0) {
+        combo++;
+        if (combo > 1) { // 2連消し(= 1 REN) から加算
+            const renIndex = Math.min(combo - 2, REN_TABLE.length - 1);
+            renBonus = REN_TABLE[renIndex];
+            const renDisplay = combo - 1;
+            if (txt !== "") txt += `\n${renDisplay} REN`;
+            else txt = `${renDisplay} REN`;
         }
     }
 
-    // T-Spin、テトリス、RENのいずれかが発生していれば画面に表示
+    const totalDamage = baseDamage + b2bBonus + renBonus;
+
     if (txt !== "") {
         showActionText(txt);
     }
     
-    if (gameMode === 'multi' && damage > 0) {
-        socket.emit('sendGarbage', damage);
+    if (gameMode === 'multi' && totalDamage > 0) {
+        socket.emit('sendGarbage', totalDamage);
     }
 }
 
@@ -562,6 +601,7 @@ function update(time = 0) {
 
         if (collide(board, {matrix: player.matrix, pos: {x:player.pos.x, y:player.pos.y+1}})) {
             lockTimer += deltaTime;
+            // 公式ガイドライン規格: 接地固定猶予 500ms (0.5秒)
             if (lockTimer >= 500) lockPiece();
         } else { lockTimer = 0; }
     }
@@ -584,11 +624,32 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('keyup', e => activeKeys[e.code] = false);
 
+// ボタン長押し操作 (公式DAS 150ms / ARR 33ms 準拠)
 function bindBtn(id, action, pressAction) {
     const el = document.getElementById(id);
-    let intv;
-    const start = (e) => { e.preventDefault(); if(isPlaying && !isClearing) { pressAction(); if(action === 'ArrowDown') activeKeys['ArrowDown'] = true; else intv = setInterval(pressAction, 120); } };
-    const end = (e) => { e.preventDefault(); clearInterval(intv); if(action === 'ArrowDown') activeKeys['ArrowDown'] = false; };
+    let timeout, interval;
+    const start = (e) => { 
+        e.preventDefault(); 
+        if(isPlaying && !isClearing) { 
+            pressAction(); 
+            if(action === 'ArrowDown') {
+                activeKeys['ArrowDown'] = true; 
+            } else { 
+                clearTimeout(timeout);
+                clearInterval(interval);
+                // 公式設定: DAS 150ms (長押し検知開始) / ARR 33ms (秒間約30回移動)
+                timeout = setTimeout(() => {
+                    interval = setInterval(pressAction, 33);
+                }, 150);
+            } 
+        } 
+    };
+    const end = (e) => { 
+        e.preventDefault(); 
+        clearTimeout(timeout);
+        clearInterval(interval); 
+        if(action === 'ArrowDown') activeKeys['ArrowDown'] = false; 
+    };
     el.addEventListener('touchstart', start); el.addEventListener('touchend', end);
     el.addEventListener('mousedown', start); el.addEventListener('mouseup', end); el.addEventListener('mouseleave', end);
 }
